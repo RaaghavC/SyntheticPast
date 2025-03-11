@@ -1,0 +1,7 @@
+pdf_vectorstore
+pdf_vectorstore/*
+static
+venv
+.DS_Store
+SP
+.env
