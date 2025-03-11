@@ -849,7 +849,7 @@ with col1:
     if st.session_state.get("image_url"):
         if st.session_state.get("is_default_image", False):
             # Display the default historical panorama
-            st.image(st.session_state.image_url, caption="San Francisco Harbor, 1851 (Default Historical Panorama)", use_column_width=True)
+            st.image(st.session_state.image_url, caption="San Francisco Harbor, 1851 (Default Historical Panorama)", use_container_width=True)
             st.info("This is a default historical panorama. Use the 'Generate New Panorama' button above to create a custom AI-generated panoramic view.")
         elif not st.session_state.get("imgur_failed"):
             # Use Imgur hosted image with VR viewer
@@ -896,7 +896,7 @@ with col1:
     
     elif st.session_state.get("local_image"):
         # Display the image directly in Streamlit when Imgur fails
-        st.image(st.session_state.local_image, caption="Generated panorama", use_column_width=True)
+        st.image(st.session_state.local_image, caption="Generated panorama", use_container_width=True)
         st.info("Note: The VR viewer is unavailable due to an image hosting issue. You can still view the panorama above.")
     st.markdown('</div>', unsafe_allow_html=True)
 
