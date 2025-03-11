@@ -86,14 +86,57 @@ st.markdown("""
         border-radius: 5px !important;
         font-weight: bold !important;
     }
+    .api-key-warning {
+        background-color: #FF4500;
+        color: white;
+        padding: 10px;
+        border-radius: 5px;
+        margin-bottom: 10px;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# API Keys (inserted directly here)
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-STABLE_DIFFUSION_API_KEY = os.getenv('STABLE_DIFFUSION_API_KEY')
-os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-openai.api_key = OPENAI_API_KEY
+# Check if API keys are in session state, otherwise initialize with environment variables
+if 'OPENAI_API_KEY' not in st.session_state:
+    st.session_state.OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+if 'STABLE_DIFFUSION_API_KEY' not in st.session_state:
+    st.session_state.STABLE_DIFFUSION_API_KEY = os.getenv('STABLE_DIFFUSION_API_KEY', '')
+if 'IMGUR_API_KEY' not in st.session_state:
+    st.session_state.IMGUR_API_KEY = os.getenv('IMGUR_API_KEY', '')
+
+# Check if keys need to be input by user
+if not st.session_state.OPENAI_API_KEY or not st.session_state.STABLE_DIFFUSION_API_KEY or not st.session_state.IMGUR_API_KEY:
+    st.markdown('<div class="api-key-warning">API Keys Required</div>', unsafe_allow_html=True)
+    
+    with st.expander("Set API Keys", expanded=not st.session_state.OPENAI_API_KEY):
+        st.write("Please enter your API keys to use this application:")
+        st.session_state.OPENAI_API_KEY = st.text_input("OpenAI API Key", value=st.session_state.OPENAI_API_KEY, type="password")
+        st.session_state.STABLE_DIFFUSION_API_KEY = st.text_input("Stable Diffusion API Key", value=st.session_state.STABLE_DIFFUSION_API_KEY, type="password")
+        st.session_state.IMGUR_API_KEY = st.text_input("Imgur API Key", value=st.session_state.IMGUR_API_KEY, type="password")
+        
+        if st.button("Save API Keys"):
+            if st.session_state.OPENAI_API_KEY and st.session_state.STABLE_DIFFUSION_API_KEY and st.session_state.IMGUR_API_KEY:
+                st.success("API keys saved successfully!")
+            else:
+                st.error("All API keys are required.")
+
+# Only proceed if all API keys are present
+api_keys_set = bool(st.session_state.OPENAI_API_KEY and st.session_state.STABLE_DIFFUSION_API_KEY and st.session_state.IMGUR_API_KEY)
+
+# Set API keys from session state instead of environment variables
+if api_keys_set:
+    OPENAI_API_KEY = st.session_state.OPENAI_API_KEY
+    STABLE_DIFFUSION_API_KEY = st.session_state.STABLE_DIFFUSION_API_KEY
+    IMGUR_API_KEY = st.session_state.IMGUR_API_KEY
+    
+    # Set the environment variable and OpenAI API key
+    os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+    openai.api_key = OPENAI_API_KEY
+else:
+    # Default values to prevent errors
+    OPENAI_API_KEY = ""
+    STABLE_DIFFUSION_API_KEY = ""
+    IMGUR_API_KEY = ""
 
 # Stable Diffusion API endpoint
 STABLE_DIFFUSION_API_URL = "https://modelslab.com/api/v6/realtime/text2img"
@@ -200,6 +243,12 @@ def download_image(url: str) -> Optional[Image.Image]:
 
 def analyze_image_with_gpt4v(image: Image.Image) -> str:
     """Analyze image using GPT-4V vision capabilities."""
+    if not api_keys_set:
+        return json.dumps({
+            "description": "API keys are required to analyze images.",
+            "timestamp": time.strftime('%Y-%m-%d %H:%M:%S')
+        })
+    
     buffered = io.BytesIO()
     image.save(buffered, format="JPEG", quality=85)
     base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
@@ -250,6 +299,9 @@ def analyze_image_with_gpt4v(image: Image.Image) -> str:
 
 def verify_historical_accuracy(image: Image.Image) -> bool:
     """Use GPT-4V to verify the image contains no modern elements before accepting it"""
+    if not api_keys_set:
+        return True  # Skip verification if API keys aren't set
+    
     buffered = io.BytesIO()
     image.save(buffered, format="JPEG", quality=85)
     base64_image = base64.b64encode(buffered.getvalue()).decode('utf-8')
@@ -290,6 +342,9 @@ def verify_historical_accuracy(image: Image.Image) -> bool:
 
 def evaluate_prompt_match(image_description: str) -> Dict:
     """Compare image against original prompt requirements."""
+    if not api_keys_set:
+        return create_default_evaluation()
+    
     try:
         description_data = json.loads(image_description) if isinstance(image_description, str) else image_description
         description_text = description_data.get('description', '')
@@ -363,6 +418,9 @@ def create_default_evaluation() -> Dict:
 
 def improve_panorama_prompt(current_prompt: str, evaluation: Dict) -> str:
     """Generate improved prompt based on the evaluation results."""
+    if not api_keys_set:
+        return current_prompt
+    
     try:
         improvement_context = {
             "missing_elements": evaluation.get('missing_elements', []),
@@ -409,6 +467,10 @@ def remove_right_side(image: Image.Image, removal_fraction: float = 0.049) -> Im
 
 def iterative_panorama_generation() -> (Optional[Image.Image], Optional[Dict], Optional[float], str):
     """Iteratively generate, analyze, and refine the panorama until a target quality is met or iterations are exhausted."""
+    if not api_keys_set:
+        st.error("API keys are required to generate panoramas.")
+        return None, None, None, PANORAMIC_PROMPT
+    
     max_iterations = 3
     best_match = None
     best_image = None
@@ -537,6 +599,10 @@ class ImageGenerator:
         self.negative_prompt = NEGATIVE_PROMPT
 
     def generate_panorama(self):
+        if not api_keys_set:
+            st.error("API keys are required to generate panoramas.")
+            return None, None
+            
         headers = {'Content-Type': 'application/json'}
         payload = {
             "key": STABLE_DIFFUSION_API_KEY,
@@ -625,6 +691,10 @@ class ImgurClient:
 
 class RAGChatbot:
     def __init__(self, persist_directory: str = "pdf_vectorstore", model_name: str = "gpt-4o"):
+        if not api_keys_set:
+            # Return a dummy chatbot that will prompt for API keys
+            return
+            
         self.vector_store = Chroma(
             persist_directory=persist_directory,
             embedding_function=HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
@@ -660,6 +730,9 @@ Answer: """
             combine_docs_chain_kwargs={"prompt": self.prompt}
         )
     def ask(self, question: str) -> str:
+        if not api_keys_set:
+            return "Please set your API keys in the expander at the top of the page to use the chat feature."
+            
         try:
             docs_and_scores = self.vector_store.similarity_search_with_score(question, k=3)
             print("\nRetrieved Documents:")
@@ -685,6 +758,10 @@ TOPIC_QUESTIONS = {
 }
 
 def handle_topic_click(topic):
+    if not api_keys_set:
+        st.warning("Please set your API keys in the expander at the top of the page to use this feature.")
+        return
+        
     question = TOPIC_QUESTIONS[topic]
     st.session_state.messages.append({"role": "user", "content": question})
     try:
@@ -708,8 +785,7 @@ if "image_url" not in st.session_state:
     st.session_state.image_url = None
 
 image_gen = ImageGenerator()
-IMGUR_API_KEY = os.getenv('IMGUR_API_KEY')
-imgur_client = ImgurClient(IMGUR_API_KEY)
+imgur_client = ImgurClient(IMGUR_API_KEY if api_keys_set else "")
 
 col1, col2 = st.columns([2, 1])
 
@@ -718,30 +794,34 @@ with col1:
     
     # When the button is clicked, clear any previous panorama and generate a new one.
     if st.button("Generate New Panorama"):
-        st.session_state.pop("image_url", None)
-        with st.spinner("Generating iterative panorama..."):
-            best_image, best_analysis, best_match, final_prompt = iterative_panorama_generation()
-            if best_image:
-                os.makedirs("static/generated", exist_ok=True)
-                save_path = f"static/generated/panorama_{int(time.time())}.jpg"
-                best_image.save(save_path)
-                try:
-                    result = imgur_client.upload_image(
-                        save_path,
-                        title=f"Gold Rush Panorama match {int(best_match * 100)}",
-                        description=f"Generated panorama with final prompt:\n{final_prompt}\n\nAnalysis:\n{json.dumps(best_analysis, indent=2)}"
-                    )
-                    image_url = result['link']
-                    st.session_state.image_url = image_url
-                    chatbot.memory.chat_memory.add_message(
-                        SystemMessage(
-                            content=f"Image Generation Details:\nFinal Prompt: {final_prompt}\nImage Evaluation: {json.dumps(best_analysis, indent=2)}"
+        if not api_keys_set:
+            st.warning("Please set your API keys in the expander at the top of the page to use this feature.")
+        else:
+            st.session_state.pop("image_url", None)
+            with st.spinner("Generating iterative panorama..."):
+                best_image, best_analysis, best_match, final_prompt = iterative_panorama_generation()
+                if best_image:
+                    os.makedirs("static/generated", exist_ok=True)
+                    save_path = f"static/generated/panorama_{int(time.time())}.jpg"
+                    best_image.save(save_path)
+                    try:
+                        result = imgur_client.upload_image(
+                            save_path,
+                            title=f"Gold Rush Panorama match {int(best_match * 100)}",
+                            description=f"Generated panorama with final prompt:\n{final_prompt}\n\nAnalysis:\n{json.dumps(best_analysis, indent=2)}"
                         )
-                    )
-                except Exception as e:
-                    st.error(f"Error uploading to Imgur: {str(e)}")
-            else:
-                st.error("Failed to generate panorama.")
+                        image_url = result['link']
+                        st.session_state.image_url = image_url
+                        if hasattr(chatbot, 'memory') and hasattr(chatbot.memory, 'chat_memory'):
+                            chatbot.memory.chat_memory.add_message(
+                                SystemMessage(
+                                    content=f"Image Generation Details:\nFinal Prompt: {final_prompt}\nImage Evaluation: {json.dumps(best_analysis, indent=2)}"
+                                )
+                            )
+                    except Exception as e:
+                        st.error(f"Error uploading to Imgur: {str(e)}")
+                else:
+                    st.error("Failed to generate panorama.")
     
     # If an image URL exists, display the VR viewer with the image URL embedded.
     if st.session_state.get("image_url"):
