@@ -782,7 +782,15 @@ st.markdown("""
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "image_url" not in st.session_state:
-    st.session_state.image_url = None
+    # Set a default panorama URL - this is a historic SF panorama from Wikimedia Commons that's free to use
+    st.session_state.image_url = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/da/San_Francisco_harbor%2C_1851.jpg/2560px-San_Francisco_harbor%2C_1851.jpg"
+    st.session_state.is_default_image = True
+else:
+    st.session_state.is_default_image = False
+if "local_image" not in st.session_state:
+    st.session_state.local_image = None
+if "imgur_failed" not in st.session_state:
+    st.session_state.imgur_failed = False
 
 image_gen = ImageGenerator()
 imgur_client = ImgurClient(IMGUR_API_KEY if api_keys_set else "")
@@ -797,13 +805,23 @@ with col1:
         if not api_keys_set:
             st.warning("Please set your API keys in the expander at the top of the page to use this feature.")
         else:
-            st.session_state.pop("image_url", None)
+            # Remove default image flag when generating new panorama
+            st.session_state.is_default_image = False
+            st.session_state.imgur_failed = False
+            st.session_state.local_image = None
             with st.spinner("Generating iterative panorama..."):
                 best_image, best_analysis, best_match, final_prompt = iterative_panorama_generation()
                 if best_image:
                     os.makedirs("static/generated", exist_ok=True)
                     save_path = f"static/generated/panorama_{int(time.time())}.jpg"
                     best_image.save(save_path)
+                    # First save image in-memory for display in case Imgur fails
+                    buffered = io.BytesIO()
+                    best_image.save(buffered, format="JPEG")
+                    img_data = buffered.getvalue()
+                    st.session_state.local_image = img_data
+                    
+                    # Try uploading to Imgur but have a fallback
                     try:
                         result = imgur_client.upload_image(
                             save_path,
@@ -812,6 +830,8 @@ with col1:
                         )
                         image_url = result['link']
                         st.session_state.image_url = image_url
+                        st.session_state.imgur_failed = False
+                        
                         if hasattr(chatbot, 'memory') and hasattr(chatbot.memory, 'chat_memory'):
                             chatbot.memory.chat_memory.add_message(
                                 SystemMessage(
@@ -819,13 +839,21 @@ with col1:
                                 )
                             )
                     except Exception as e:
-                        st.error(f"Error uploading to Imgur: {str(e)}")
+                        st.warning(f"Error uploading to Imgur: {str(e)}")
+                        st.info("Don't worry! The image was still generated and can be viewed below.")
+                        st.session_state.imgur_failed = True
                 else:
                     st.error("Failed to generate panorama.")
     
-    # If an image URL exists, display the VR viewer with the image URL embedded.
+    # Display the image - either from Imgur URL or directly from local storage
     if st.session_state.get("image_url"):
-        vr_html = """<!DOCTYPE html>
+        if st.session_state.get("is_default_image", False):
+            # Display the default historical panorama
+            st.image(st.session_state.image_url, caption="San Francisco Harbor, 1851 (Default Historical Panorama)", use_column_width=True)
+            st.info("This is a default historical panorama. Use the 'Generate New Panorama' button above to create a custom AI-generated panoramic view.")
+        elif not st.session_state.get("imgur_failed"):
+            # Use Imgur hosted image with VR viewer
+            vr_html = """<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -862,9 +890,14 @@ with col1:
   </script>
 </body>
 </html>"""
-        formatted_vr_html = vr_html.format(image_url=st.session_state.image_url)
-        vr_viewer_url = f"data:text/html,{requests.utils.quote(formatted_vr_html)}"
-        st.components.v1.iframe(vr_viewer_url, height=500, width=800, scrolling=False)
+            formatted_vr_html = vr_html.format(image_url=st.session_state.image_url)
+            vr_viewer_url = f"data:text/html,{requests.utils.quote(formatted_vr_html)}"
+            st.components.v1.iframe(vr_viewer_url, height=500, width=800, scrolling=False)
+    
+    elif st.session_state.get("local_image"):
+        # Display the image directly in Streamlit when Imgur fails
+        st.image(st.session_state.local_image, caption="Generated panorama", use_column_width=True)
+        st.info("Note: The VR viewer is unavailable due to an image hosting issue. You can still view the panorama above.")
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col2:
