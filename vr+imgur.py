@@ -8,18 +8,19 @@ import io
 import base64
 import numpy as np
 from dotenv import load_dotenv
+load_dotenv()
 from PIL import Image
 from typing import List, Dict, Optional, Union
 from pathlib import Path
 
-# Import additional LangChain classes
+# Import additional LangChain classes, including SystemMessage
 from langchain.chat_models import ChatOpenAI
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import Chroma
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 from langchain.prompts import PromptTemplate
-from langchain.schema import SystemMessage
+from langchain.schema import SystemMessage  # <-- New import for hidden messages
 import openai
 
 # ---------------------- Configuration and API Keys ---------------------- #
@@ -95,25 +96,47 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Get API keys from Streamlit secrets
+# Check if API keys are in session state, otherwise initialize with environment variables
 if 'OPENAI_API_KEY' not in st.session_state:
-    st.session_state.OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
+    st.session_state.OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
 if 'STABLE_DIFFUSION_API_KEY' not in st.session_state:
-    st.session_state.STABLE_DIFFUSION_API_KEY = st.secrets["STABLE_DIFFUSION_API_KEY"]
+    st.session_state.STABLE_DIFFUSION_API_KEY = os.getenv('STABLE_DIFFUSION_API_KEY', '')
 if 'IMGUR_API_KEY' not in st.session_state:
-    st.session_state.IMGUR_API_KEY = st.secrets["IMGUR_API_KEY"]
+    st.session_state.IMGUR_API_KEY = os.getenv('IMGUR_API_KEY', '')
 
-# API keys are always set from secrets
-OPENAI_API_KEY = st.session_state.OPENAI_API_KEY
-STABLE_DIFFUSION_API_KEY = st.session_state.STABLE_DIFFUSION_API_KEY
-IMGUR_API_KEY = st.session_state.IMGUR_API_KEY
+# Check if keys need to be input by user
+if not st.session_state.OPENAI_API_KEY or not st.session_state.STABLE_DIFFUSION_API_KEY or not st.session_state.IMGUR_API_KEY:
+    st.markdown('<div class="api-key-warning">API Keys Required</div>', unsafe_allow_html=True)
+    
+    with st.expander("Set API Keys", expanded=not st.session_state.OPENAI_API_KEY):
+        st.write("Please enter your API keys to use this application:")
+        st.session_state.OPENAI_API_KEY = st.text_input("OpenAI API Key", value=st.session_state.OPENAI_API_KEY, type="password")
+        st.session_state.STABLE_DIFFUSION_API_KEY = st.text_input("Stable Diffusion API Key", value=st.session_state.STABLE_DIFFUSION_API_KEY, type="password")
+        st.session_state.IMGUR_API_KEY = st.text_input("Imgur API Key", value=st.session_state.IMGUR_API_KEY, type="password")
+        
+        if st.button("Save API Keys"):
+            if st.session_state.OPENAI_API_KEY and st.session_state.STABLE_DIFFUSION_API_KEY and st.session_state.IMGUR_API_KEY:
+                st.success("API keys saved successfully!")
+            else:
+                st.error("All API keys are required.")
 
-# Set the environment variable and OpenAI API key
-os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-openai.api_key = OPENAI_API_KEY
+# Only proceed if all API keys are present
+api_keys_set = bool(st.session_state.OPENAI_API_KEY and st.session_state.STABLE_DIFFUSION_API_KEY and st.session_state.IMGUR_API_KEY)
 
-# Flag to indicate API keys are set
-api_keys_set = True
+# Set API keys from session state instead of environment variables
+if api_keys_set:
+    OPENAI_API_KEY = st.session_state.OPENAI_API_KEY
+    STABLE_DIFFUSION_API_KEY = st.session_state.STABLE_DIFFUSION_API_KEY
+    IMGUR_API_KEY = st.session_state.IMGUR_API_KEY
+    
+    # Set the environment variable and OpenAI API key
+    os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
+    openai.api_key = OPENAI_API_KEY
+else:
+    # Default values to prevent errors
+    OPENAI_API_KEY = ""
+    STABLE_DIFFUSION_API_KEY = ""
+    IMGUR_API_KEY = ""
 
 # Stable Diffusion API endpoint
 STABLE_DIFFUSION_API_URL = "https://modelslab.com/api/v6/realtime/text2img"
@@ -774,8 +797,12 @@ else:
     st.session_state.is_default_image = False
 if "local_image" not in st.session_state:
     st.session_state.local_image = None
+if "imgur_failed" not in st.session_state:
+    st.session_state.imgur_failed = False
 
 image_gen = ImageGenerator()
+IMGUR_API_KEY = st.session_state.IMGUR_API_KEY if api_keys_set else ""
+imgur_client = ImgurClient(IMGUR_API_KEY)
 
 col1, col2 = st.columns([2, 1])
 
@@ -789,7 +816,9 @@ with col1:
         else:
             # Remove default image flag when generating new panorama
             st.session_state.is_default_image = False
-            with st.spinner("Generating panorama..."):
+            st.session_state.imgur_failed = False
+            st.session_state.local_image = None
+            with st.spinner("Generating iterative panorama..."):
                 best_image, best_analysis, best_match, final_prompt = iterative_panorama_generation()
                 if best_image:
                     os.makedirs("static/generated", exist_ok=True)
@@ -797,34 +826,57 @@ with col1:
                     save_path = f"static/generated/panorama_{int(time.time())}.jpg"
                     best_image.save(save_path)
                     
-                    # Save image in-memory for display
+                    # First save image in-memory for display in case Imgur fails
                     buffered = io.BytesIO()
                     best_image.save(buffered, format="JPEG")
                     img_data = buffered.getvalue()
                     st.session_state.local_image = img_data
                     
-                    # Add the image generation details as a hidden system message to the chatbot's memory.
-                    if hasattr(chatbot, 'memory') and hasattr(chatbot.memory, 'chat_memory'):
-                        chatbot.memory.chat_memory.add_message(
-                            SystemMessage(
-                                content=f"Image Generation Details:\nFinal Prompt: {final_prompt}\nImage Evaluation: {json.dumps(best_analysis, indent=2)}"
-                            )
+                    # Try uploading to Imgur but have a fallback
+                    try:
+                        result = imgur_client.upload_image(
+                            save_path,
+                            title=f"Gold Rush Panorama match {int(best_match * 100)}",
+                            description=f"Generated panorama with final prompt:\n{final_prompt}\n\nAnalysis:\n{json.dumps(best_analysis, indent=2)}"
                         )
+                        image_url = result['link']
+                        st.session_state.image_url = image_url
+                        st.session_state.imgur_failed = False
+                        
+                        # Add the image generation details as a hidden system message to the chatbot's memory.
+                        if hasattr(chatbot, 'memory') and hasattr(chatbot.memory, 'chat_memory'):
+                            chatbot.memory.chat_memory.add_message(
+                                SystemMessage(
+                                    content=f"Image Generation Details:\nFinal Prompt: {final_prompt}\nImage Evaluation: {json.dumps(best_analysis, indent=2)}"
+                                )
+                            )
+                    except Exception as e:
+                        st.warning(f"Error uploading to Imgur: {str(e)}")
+                        st.info("Don't worry! The image was still generated and can be viewed below.")
+                        st.session_state.imgur_failed = True
                 else:
                     st.error("Failed to generate panorama.")
     
     # Display the panorama
-    if st.session_state.get("image_url") or st.session_state.get("local_image"):
+    if st.session_state.get("image_url"):
         if st.session_state.get("is_default_image", False):
             # Display the default historical panorama
             st.image(st.session_state.image_url, caption="San Francisco Harbor, 1851 (Default Historical Panorama)", use_container_width=True)
             st.info("This is a default historical panorama. Use the 'Generate New Panorama' button above to create a custom AI-generated panoramic view.")
-        elif st.session_state.get("local_image"):
-            # Display the image directly in Streamlit
+        elif st.session_state.get("imgur_failed", False) and st.session_state.get("local_image"):
+            # Display the image directly in Streamlit when Imgur fails
             st.image(st.session_state.local_image, caption="Generated panorama", use_container_width=True)
+            st.info("Note: The panorama viewer is unavailable due to an image hosting issue. You can still view the panorama above.")
         else:
-            # Use the image URL if neither default nor local image is available
-            st.image(st.session_state.image_url, caption="Generated panorama", use_container_width=True)
+            # Always display the current panorama using Pannellum viewer
+            # Append a unique cachebuster query parameter to force a fresh load.
+            unique_url = f"{st.session_state.image_url}?cachebuster={int(time.time())}"
+            components.iframe(
+                f"https://cdn.pannellum.org/2.5/pannellum.htm#panorama={unique_url}",
+                height=500,
+                width=800,
+                scrolling=False
+            )
     st.markdown('</div>', unsafe_allow_html=True)
 
 with col2:
