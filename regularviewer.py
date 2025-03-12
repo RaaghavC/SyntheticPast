@@ -676,24 +676,22 @@ class ImgurClient:
 
 class RAGChatbot:
     def __init__(self, persist_directory: str = "pdf_vectorstore", model_name: str = "gpt-4o"):
-        if not api_keys_set:
-            # Return a dummy chatbot that will prompt for API keys
-            return
-            
-        self.vector_store = Chroma(
-            persist_directory=persist_directory,
-            embedding_function=HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
-        )
-        self.llm = ChatOpenAI(
-            model_name=model_name,
-            temperature=0.7, 
-            openai_api_key=OPENAI_API_KEY
-        )
-        self.memory = ConversationBufferMemory(
-            memory_key="chat_history",
-            return_messages=True
-        )
-        template = """You are a helpful assistant that answers questions based on the provided context.
+        # Changed: Always initialize with keys from secrets  
+        try:
+            self.vector_store = Chroma(
+                persist_directory=persist_directory,
+                embedding_function=HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
+            )
+            self.llm = ChatOpenAI(
+                model_name=model_name,
+                temperature=0.7, 
+                openai_api_key=OPENAI_API_KEY
+            )
+            self.memory = ConversationBufferMemory(
+                memory_key="chat_history",
+                return_messages=True
+            )
+            template = """You are a helpful assistant that answers questions based on the provided context.
 Use the following context to answer the question. If you're unsure or the answer isn't in the context,
 say so directly rather than making assumptions.
 
@@ -704,19 +702,24 @@ Chat History: {chat_history}
 Question: {question}
 
 Answer: """
-        self.prompt = PromptTemplate(
-            input_variables=["context", "chat_history", "question"],
-            template=template
-        )
-        self.chain = ConversationalRetrievalChain.from_llm(
-            llm=self.llm,
-            retriever=self.vector_store.as_retriever(search_kwargs={"k": 3}),
-            memory=self.memory,
-            combine_docs_chain_kwargs={"prompt": self.prompt}
-        )
+            self.prompt = PromptTemplate(
+                input_variables=["context", "chat_history", "question"],
+                template=template
+            )
+            self.chain = ConversationalRetrievalChain.from_llm(
+                llm=self.llm,
+                retriever=self.vector_store.as_retriever(search_kwargs={"k": 3}),
+                memory=self.memory,
+                combine_docs_chain_kwargs={"prompt": self.prompt}
+            )
+            self.initialized = True
+        except Exception as e:
+            print(f"Error initializing RAGChatbot: {str(e)}")
+            self.initialized = False
+            
     def ask(self, question: str) -> str:
-        if not api_keys_set:
-            return "Please set your API keys in the expander at the top of the page to use the chat feature."
+        if not self.initialized:
+            return "The chatbot could not be initialized. Please check the API keys and try again."
             
         try:
             docs_and_scores = self.vector_store.similarity_search_with_score(question, k=3)
@@ -728,11 +731,27 @@ Answer: """
         except Exception as e:
             return f"Error: {str(e)}"
 
-@st.cache_resource
+# Changed: Modified the get_chatbot function to ensure API keys are set
+@st.cache_resource(show_spinner=False)
 def get_chatbot():
-    return RAGChatbot()
+    if st.session_state.OPENAI_API_KEY:
+        chatbot = RAGChatbot()
+        if not chatbot.initialized:
+            print("Chatbot failed to initialize properly.")
+            return None
+        return chatbot
+    else:
+        print("No OpenAI API key available.")
+        return None
 
+# Initialize chatbot after ensuring API keys are available
 chatbot = get_chatbot()
+if chatbot is None:
+    # Create a simple fallback chatbot for error cases
+    class FallbackChatbot:
+        def ask(self, question: str) -> str:
+            return "I'm having trouble accessing the knowledge base. Please try again later or contact the administrator."
+    chatbot = FallbackChatbot()
 
 # ---------------------- End of Existing Classes ---------------------- #
 
@@ -743,10 +762,6 @@ TOPIC_QUESTIONS = {
 }
 
 def handle_topic_click(topic):
-    if not api_keys_set:
-        st.warning("Please set your API keys in the expander at the top of the page to use this feature.")
-        return
-        
     question = TOPIC_QUESTIONS[topic]
     st.session_state.messages.append({"role": "user", "content": question})
     try:
@@ -784,34 +799,31 @@ with col1:
     
     # When the button is clicked, clear any previous panorama and generate a new one.
     if st.button("Generate New Panorama"):
-        if not api_keys_set:
-            st.warning("Please set your API keys in the expander at the top of the page to use this feature.")
-        else:
-            # Remove default image flag when generating new panorama
-            st.session_state.is_default_image = False
-            with st.spinner("Generating panorama..."):
-                best_image, best_analysis, best_match, final_prompt = iterative_panorama_generation()
-                if best_image:
-                    os.makedirs("static/generated", exist_ok=True)
-                    # Use a unique filename by appending the current timestamp.
-                    save_path = f"static/generated/panorama_{int(time.time())}.jpg"
-                    best_image.save(save_path)
-                    
-                    # Save image in-memory for display
-                    buffered = io.BytesIO()
-                    best_image.save(buffered, format="JPEG")
-                    img_data = buffered.getvalue()
-                    st.session_state.local_image = img_data
-                    
-                    # Add the image generation details as a hidden system message to the chatbot's memory.
-                    if hasattr(chatbot, 'memory') and hasattr(chatbot.memory, 'chat_memory'):
-                        chatbot.memory.chat_memory.add_message(
-                            SystemMessage(
-                                content=f"Image Generation Details:\nFinal Prompt: {final_prompt}\nImage Evaluation: {json.dumps(best_analysis, indent=2)}"
-                            )
+        # Remove default image flag when generating new panorama
+        st.session_state.is_default_image = False
+        with st.spinner("Generating panorama..."):
+            best_image, best_analysis, best_match, final_prompt = iterative_panorama_generation()
+            if best_image:
+                os.makedirs("static/generated", exist_ok=True)
+                # Use a unique filename by appending the current timestamp.
+                save_path = f"static/generated/panorama_{int(time.time())}.jpg"
+                best_image.save(save_path)
+                
+                # Save image in-memory for display
+                buffered = io.BytesIO()
+                best_image.save(buffered, format="JPEG")
+                img_data = buffered.getvalue()
+                st.session_state.local_image = img_data
+                
+                # Add the image generation details as a hidden system message to the chatbot's memory.
+                if hasattr(chatbot, 'memory') and hasattr(chatbot.memory, 'chat_memory'):
+                    chatbot.memory.chat_memory.add_message(
+                        SystemMessage(
+                            content=f"Image Generation Details:\nFinal Prompt: {final_prompt}\nImage Evaluation: {json.dumps(best_analysis, indent=2)}"
                         )
-                else:
-                    st.error("Failed to generate panorama.")
+                    )
+            else:
+                st.error("Failed to generate panorama.")
     
     # Display the panorama
     if st.session_state.get("image_url") or st.session_state.get("local_image"):
