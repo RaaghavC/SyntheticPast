@@ -1083,4 +1083,4 @@ with col3:
         </div>
     """, unsafe_allow_html=True)
     if st.button("Learn More About Mining", key="mining_techniques"):
-        handle_topic_click("mining_techniques")git add regularviewer.py
+        handle_topic_click("mining_techniques")
