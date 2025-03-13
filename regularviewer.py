@@ -23,6 +23,23 @@ from langchain.prompts import PromptTemplate
 from langchain.schema import SystemMessage
 import openai
 
+# Add at the top of your app
+import os
+
+st.write("Current directory:", os.getcwd())
+st.write("Files in current directory:", os.listdir())
+if os.path.exists("vectorstore.zip"):
+    st.write("Zip file exists!")
+    st.write("Zip file size:", os.path.getsize("vectorstore.zip"))
+else:
+    st.write("Zip file NOT found!")
+
+if os.path.exists("pdf_vectorstore"):
+    st.write("Vector store directory exists!")
+    st.write("Files in vector store:", os.listdir("pdf_vectorstore"))
+else:
+    st.write("Vector store directory NOT found!")
+
 # ---------------------- Configuration and API Keys ---------------------- #
 st.set_page_config(
     page_title="Gold Rush Explorer",
@@ -1066,4 +1083,4 @@ with col3:
         </div>
     """, unsafe_allow_html=True)
     if st.button("Learn More About Mining", key="mining_techniques"):
-        handle_topic_click("mining_techniques")
+        handle_topic_click("mining_techniques")git add regularviewer.py
