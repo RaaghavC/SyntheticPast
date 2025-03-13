@@ -13,6 +13,13 @@ from PIL import Image
 from typing import List, Dict, Optional, Union
 from pathlib import Path
 
+# IMPORTANT: set_page_config must be the first Streamlit command
+st.set_page_config(
+    page_title="Gold Rush Explorer",
+    page_icon="⛰️",
+    layout="wide"
+)
+
 # Import additional LangChain classes
 from langchain.chat_models import ChatOpenAI
 from langchain_community.embeddings import HuggingFaceEmbeddings
@@ -20,32 +27,25 @@ from langchain_community.vectorstores import Chroma
 from langchain.chains import ConversationalRetrievalChain
 from langchain.memory import ConversationBufferMemory
 from langchain.prompts import PromptTemplate
-from langchain.schema import SystemMessage
+from langchain.schema import SystemMessage, Document
 import openai
 
-# Add at the top of your app
-import os
-
-st.write("Current directory:", os.getcwd())
-st.write("Files in current directory:", os.listdir())
-if os.path.exists("vectorstore.zip"):
-    st.write("Zip file exists!")
-    st.write("Zip file size:", os.path.getsize("vectorstore.zip"))
-else:
-    st.write("Zip file NOT found!")
-
-if os.path.exists("pdf_vectorstore"):
-    st.write("Vector store directory exists!")
-    st.write("Files in vector store:", os.listdir("pdf_vectorstore"))
-else:
-    st.write("Vector store directory NOT found!")
-
-# ---------------------- Configuration and API Keys ---------------------- #
-st.set_page_config(
-    page_title="Gold Rush Explorer",
-    page_icon="⛰️",
-    layout="wide"
-)
+# Debugging info (hidden in expander)
+with st.expander("Debug Info", expanded=False):
+    st.write("Current directory:", os.getcwd())
+    st.write("Files in current directory:", os.listdir())
+    
+    if os.path.exists("vectorstore.zip"):
+        st.write("Zip file exists!")
+        st.write("Zip file size:", os.path.getsize("vectorstore.zip"))
+    else:
+        st.write("Zip file NOT found!")
+    
+    if os.path.exists("pdf_vectorstore"):
+        st.write("Vector store directory exists!")
+        st.write("Files in vector store:", os.listdir("pdf_vectorstore"))
+    else:
+        st.write("Vector store directory NOT found!")
 
 # Custom CSS styling
 st.markdown("""
@@ -154,6 +154,79 @@ STABLE_DIFFUSION_API_URL = "https://modelslab.com/api/v6/realtime/text2img"
 ANTIALIAS = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.ANTIALIAS
 Image.MAX_IMAGE_PIXELS = None
 
+# Function to create simple Gold Rush knowledge base
+def create_simple_gold_rush_kb():
+    """Create a simple in-memory vector store with Gold Rush facts."""
+    from langchain.schema import Document
+    
+    print("Creating simple Gold Rush knowledge base...")
+    
+    # Gold Rush facts - comprehensive set for better responses
+    facts = [
+        "The California Gold Rush began on January 24, 1848, when gold was discovered by James W. Marshall at Sutter's Mill in Coloma, California.",
+        "The news of gold brought approximately 300,000 people to California from the rest of the United States and abroad.",
+        "The sudden influx of gold into the money supply reinvigorated the American economy, and the sudden population increase allowed California to go rapidly to statehood in 1850.",
+        "The Gold Rush had severe effects on Native Californians and resulted in a precipitous population decline from disease, genocide and starvation.",
+        "By the time it ended, California had gone from a thinly populated ex-Mexican territory to having one of its first two U.S. Senators, John C. Frémont, selected to be the first presidential nominee for the new Republican Party, in 1856.",
+        "The discovery occurred at Sutter's Mill, a sawmill owned by 19th-century pioneer John Sutter, where gold was found, setting off the California Gold Rush.",
+        "Mining methods during the California Gold Rush evolved over time. At first, miners used simple techniques like gold panning and sluice boxes to wash gold from gravel.",
+        "Later, more sophisticated methods were developed, including hydraulic mining, dredging, and hard rock mining. Each of these methods had their own environmental impacts.",
+        "The most basic method used by gold prospectors during the Gold Rush was 'placer mining'. In placer mining, loose gold is recovered from sand and gravel by using water and simple tools like gold pans.",
+        "Hydraulic mining was a mining technique widely used during the California Gold Rush that used high-pressure jets of water to dislodge rock material and potential gold deposits.",
+        "The pressurized water was directed through a nozzle, known as a 'monitor', which blasted water at the hillside, washing away tons of gravel and exposing potential gold deposits.",
+        "This method was very effective for extracting gold from large areas quickly, but had devastating environmental consequences by destroying riparian habitats and causing flooding downstream.",
+        "Notable locations during the California Gold Rush included Sutter's Mill, where gold was first discovered; Coloma, the nearby settlement; San Francisco, which grew from a small settlement into a major city.",
+        "Sacramento became a major supply center; and the American River where mining camps sprang up all along the western foothills of the Sierra Nevada.",
+        "San Francisco grew exponentially during the Gold Rush. The settlement of Yerba Buena had 900 residents in 1848, but by the end of 1849, San Francisco had over 20,000 residents.",
+        "The city was the major port of entry for sea travelers to the goldfields, and its harbor was filled with abandoned ships whose crews had deserted for the gold mines.",
+        "San Francisco became a center of shipping, banking, and finance for the western mining industry.",
+        "The impact of the Gold Rush on California's indigenous population was devastating. The Native American population, estimated at 150,000 in 1845, was reduced to less than 30,000 by 1870.",
+        "This dramatic decline was due to disease, dislocation, and outright violence against Native Americans. The California legislature passed laws that facilitated removing Native Americans from their lands, enslaving them, and murdering them.",
+        "The Chinese came to California in large numbers during the Gold Rush, with 40,000 arriving from 1851-1860. They faced substantial discrimination but managed to thrive due to their organization and work ethic.",
+        "Chinese immigrants worked claims that others had abandoned as unprofitable and managed to find gold by careful work. They also established businesses that served other miners, including laundries, restaurants, and stores.",
+        "The journey to California during the Gold Rush could be made by three main routes: sailing around Cape Horn at the southern tip of South America, a journey of 18,000 nautical miles that could take six to eight months.",
+        "Alternatively, sailing to Panama, crossing the Isthmus of Panama, and then sailing to California, which reduced the ocean voyage to 6,000 miles but introduced the risk of tropical disease.",
+        "The third option was the overland route across the continental United States, which typically took four to six months and faced hazards of weather, terrain, and potential conflict with Native Americans.",
+        "The California Gold Rush accelerated California's admission to the United States as the 31st state. California was admitted to the Union as a free state on September 9, 1850.",
+        "This was part of the Compromise of 1850, just two years after the Treaty of Guadalupe Hidalgo transferred control of California from Mexico to the United States.",
+        "A sluice box was a long, inclined wooden trough with cleats or 'riffles' on the bottom. Miners would shovel sediment into the upper end while water flowed through, washing the lighter materials away.",
+        "The heavier gold would get trapped behind the riffles. Sluice boxes allowed miners to process more material than panning alone.",
+        "Multiple sluice boxes were sometimes connected to create larger operations, increasing gold recovery rates.",
+        "A rocker box (also called a cradle) was a mining device that improved upon simple panning. It consisted of a box on rockers with a sieve at the top, canvas underneath, and cleats at the bottom.",
+        "A miner would shovel sediment into the sieve, pour water over it, and rock the cradle side to side. The motion would help separate gold from sediment, with the gold being caught in the cleats or on the canvas.",
+        "A rocker allowed one or two miners to process more material than panning.",
+        "The Long Tom was an extended sluice box, typically 10-15 feet long, with a screen at the head and riffles on the bottom. It required a steady flow of water and at least four workers to operate efficiently.",
+        "Miners would shovel material onto the screen, where larger rocks would be separated out. The water would wash the finer material down the trough, with gold being caught by the riffles.",
+        "The Long Tom was more efficient than rockers or simple sluices, allowing miners to process significantly more material.",
+        "Drift mining involved digging horizontal tunnels (drifts) into hillsides to reach buried gold deposits, particularly ancient river channels that had been covered by lava flows or other material.",
+        "These ancient riverbeds often contained concentrated gold deposits. Drift mining required more technical knowledge and investment than surface mining but could yield significant returns.",
+        "Miners would follow the gold-bearing gravels, using timber supports to prevent cave-ins. This method was common in Nevada County and other areas where ancient river channels were accessible from hillsides.",
+        "Hardrock mining targeted gold embedded in quartz veins deep underground. This method required substantial investment in equipment, infrastructure, and skilled labor.",
+        "Miners dug deep shafts and tunnels, using explosives to break the ore, which was then hauled to the surface for processing.",
+        "The gold-bearing quartz was crushed in stamp mills—large machines with heavy weights that pulverized the rock—and then processed with mercury to extract the gold.",
+        "Hardrock mining dominated the later Gold Rush years and continued long after surface mining declined.",
+        "Mercury (also called quicksilver) was widely used in gold mining because of its ability to amalgamate with gold.",
+        "Miners would use mercury in sluice boxes, rocker boxes, and especially in processing ore from hardrock mining. The mercury would bond with gold particles, creating an amalgam that could be easily collected.",
+        "This amalgam was then heated, vaporizing the mercury and leaving behind relatively pure gold. This process was efficient but extremely harmful to the environment and miners' health.",
+        "Mercury contamination remains a lasting environmental legacy of the Gold Rush era.",
+        "A stamp mill was a machine used to crush gold-bearing rock into smaller pieces for processing. It consisted of heavy metal stamps (weights) attached to rods that were lifted and dropped onto the ore by a camshaft.",
+        "These were typically powered by a waterwheel or steam engine. The crushed material would then be processed with mercury to extract the gold.",
+        "Stamp mills were a key technology for hardrock mining operations, allowing miners to process large quantities of ore.",
+        "The distinctive pounding sound of stamp mills could be heard throughout mining districts during their operation."
+    ]
+    
+    # Convert to documents
+    documents = [Document(page_content=fact) for fact in facts]
+    
+    # Create embeddings
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
+    
+    # Create in-memory vector store
+    vector_store = Chroma.from_documents(documents=documents, embedding=embeddings)
+    
+    print("Simple knowledge base created successfully")
+    return vector_store
+
 # Function to extract vector store from zip if needed
 def extract_vector_store(zip_path="vectorstore.zip", extract_to="."):
     """Extract vector store from zip file if the directory doesn't exist."""
@@ -207,7 +280,7 @@ def verify_vectorstore(directory_path="pdf_vectorstore"):
 # Check vector store after extraction
 vectorstore_verified = verify_vectorstore()
 if not vectorstore_verified:
-    st.warning("Vector store not found or invalid. Chatbot functionality may be limited.")
+    st.warning("Vector store not found or invalid. Using fallback knowledge base.")
 
 # Prompts for panorama generation
 PANORAMIC_PROMPT = """Create an ultra-wide panoramic photograph of San Francisco Bay during the California Gold Rush in 1852, spanning from the hills to the shoreline in a single continuous scene.
@@ -766,33 +839,31 @@ class RAGChatbot:
         try:
             print(f"Initializing RAGChatbot with vector store at: {persist_directory}")
             
-            # Check if vector store directory exists
-            if not os.path.exists(persist_directory):
-                raise FileNotFoundError(f"Vector store directory not found: {persist_directory}")
-                
-            # Print directory contents for debugging
-            contents = os.listdir(persist_directory)
-            print(f"Vector store directory contents: {contents}")
-            
             # Initialize the embeddings model
             print("Initializing HuggingFace embeddings...")
             self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
             
-            # Try to load the vector store
-            print("Loading Chroma vector store...")
-            self.vector_store = Chroma(
-                persist_directory=persist_directory,
-                embedding_function=self.embeddings
-            )
-            
-            # Test if vector store has documents
-            print("Testing vector store retrieval...")
-            test_results = self.vector_store.similarity_search("gold rush", k=1)
-            if test_results:
-                print(f"Successfully retrieved {len(test_results)} documents from vector store")
-                print(f"Sample document content: {test_results[0].page_content[:100]}...")
-            else:
-                print("Warning: Vector store returned no documents")
+            # Try loading the vector store
+            try:
+                print("Loading Chroma vector store...")
+                self.vector_store = Chroma(
+                    persist_directory=persist_directory,
+                    embedding_function=self.embeddings
+                )
+                
+                # Test if it works
+                print("Testing vector store with a sample query...")
+                test_results = self.vector_store.similarity_search("gold rush", k=1)
+                if not test_results or len(test_results) == 0:
+                    print("Vector store returned no results, using fallback")
+                    self.vector_store = create_simple_gold_rush_kb()
+                else:
+                    print(f"Vector store test successful. Found {len(test_results)} results.")
+                    print(f"Sample document: {test_results[0].page_content[:100]}...")
+            except Exception as e:
+                print(f"Error loading vector store: {str(e)}")
+                print("Using fallback knowledge base")
+                self.vector_store = create_simple_gold_rush_kb()
             
             # Initialize the language model
             print(f"Initializing ChatOpenAI ({model_name})...")
@@ -856,12 +927,15 @@ Answer: """
             
             # Get relevant documents from vector store
             print("Retrieving documents...")
-            docs_and_scores = self.vector_store.similarity_search_with_score(question, k=3)
-            print(f"Retrieved {len(docs_and_scores)} documents")
-            
-            for i, (doc, score) in enumerate(docs_and_scores):
-                print(f"Document {i+1} (score: {score}):")
-                print(f"Content: {doc.page_content[:150]}...")
+            try:
+                docs_and_scores = self.vector_store.similarity_search_with_score(question, k=3)
+                print(f"Retrieved {len(docs_and_scores)} documents")
+                
+                for i, (doc, score) in enumerate(docs_and_scores):
+                    print(f"Document {i+1} (score: {score}):")
+                    print(f"Content: {doc.page_content[:150]}...")
+            except Exception as e:
+                print(f"Error during document retrieval: {str(e)}")
                 
             # Process through conversational retrieval chain
             print("Generating response...")
@@ -873,7 +947,18 @@ Answer: """
             print(f"❌ Error in RAGChatbot.ask: {str(e)}")
             import traceback
             traceback.print_exc()
-            return f"I apologize, but I encountered an error while trying to access my knowledge base. Please try asking your question in a different way."
+            
+            # Create a simpler response if the chain fails
+            try:
+                print("Attempting direct LLM response without retrieval...")
+                response = self.llm.predict(f"""Question about the Gold Rush: {question}
+                
+                Please provide a helpful response about the California Gold Rush based on this question.
+                Focus on historical accuracy and educational content about the 1848-1855 period.""")
+                return response
+            except Exception as e2:
+                print(f"Error in fallback response: {str(e2)}")
+                return f"I apologize, but I encountered an error while trying to access my knowledge base. Please try asking your question in a different way."
 
 # Modified get_chatbot function with better error handling
 @st.cache_resource(show_spinner=False)
@@ -884,10 +969,6 @@ def get_chatbot():
         if not OPENAI_API_KEY:
             print("No OpenAI API key available")
             return None
-            
-        # Check if vector store exists
-        if not vectorstore_verified:
-            print("Vector store not available or accessible")
             
         # Create chatbot with expanded logging
         print("Creating RAG chatbot...")
@@ -913,7 +994,21 @@ try:
         # Create a simple fallback chatbot for error cases
         class FallbackChatbot:
             def ask(self, question: str) -> str:
-                return "I'm having trouble accessing my knowledge base about the Gold Rush. This could be due to missing or inaccessible vector store files. Please contact the administrator for assistance."
+                print(f"Using fallback chatbot to answer: {question}")
+                try:
+                    llm = ChatOpenAI(
+                        model_name="gpt-4o",
+                        temperature=0.7,
+                        openai_api_key=OPENAI_API_KEY
+                    )
+                    response = llm.predict(f"""Question about the Gold Rush: {question}
+                    
+                    Please provide a helpful response about the California Gold Rush based on this question.
+                    Focus on historical accuracy and educational content about the 1848-1855 period.""")
+                    return response
+                except Exception as e:
+                    print(f"Error in fallback chatbot: {str(e)}")
+                    return "I apologize, but I'm having trouble accessing my knowledge base. Please try again with a different question."
         chatbot = FallbackChatbot()
     else:
         print("Chatbot initialized successfully")
@@ -921,7 +1016,16 @@ except Exception as e:
     print(f"Error during chatbot initialization: {str(e)}")
     class FallbackChatbot:
         def ask(self, question: str) -> str:
-            return "I encountered an unexpected error during initialization. Please try again later or contact the administrator."
+            try:
+                llm = ChatOpenAI(
+                    model_name="gpt-4o",
+                    temperature=0.7,
+                    openai_api_key=OPENAI_API_KEY
+                )
+                response = llm.predict(f"Based on your knowledge of the California Gold Rush (1848-1855), please answer this question: {question}")
+                return response
+            except:
+                return "I encountered an unexpected error during initialization. Please try again later or contact the administrator."
     chatbot = FallbackChatbot()
 
 # ---------------------- End of Existing Classes ---------------------- #
