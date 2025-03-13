@@ -7,6 +7,7 @@ import time
 import io
 import base64
 import numpy as np
+import zipfile
 from dotenv import load_dotenv
 from PIL import Image
 from typing import List, Dict, Optional, Union
@@ -95,25 +96,39 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Get API keys from Streamlit secrets
-if 'OPENAI_API_KEY' not in st.session_state:
-    st.session_state.OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
-if 'STABLE_DIFFUSION_API_KEY' not in st.session_state:
-    st.session_state.STABLE_DIFFUSION_API_KEY = st.secrets["STABLE_DIFFUSION_API_KEY"]
-if 'IMGUR_API_KEY' not in st.session_state:
-    st.session_state.IMGUR_API_KEY = st.secrets["IMGUR_API_KEY"]
+# More robust API key handling
+try:
+    # Try to get API keys from Streamlit secrets
+    if 'OPENAI_API_KEY' not in st.session_state:
+        st.session_state.OPENAI_API_KEY = st.secrets.get("OPENAI_API_KEY", "")
+    if 'STABLE_DIFFUSION_API_KEY' not in st.session_state:
+        st.session_state.STABLE_DIFFUSION_API_KEY = st.secrets.get("STABLE_DIFFUSION_API_KEY", "")
+    if 'IMGUR_API_KEY' not in st.session_state:
+        st.session_state.IMGUR_API_KEY = st.secrets.get("IMGUR_API_KEY", "")
+except Exception as e:
+    print(f"Error loading secrets: {str(e)}")
+    if 'OPENAI_API_KEY' not in st.session_state:
+        st.session_state.OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+    if 'STABLE_DIFFUSION_API_KEY' not in st.session_state:
+        st.session_state.STABLE_DIFFUSION_API_KEY = os.getenv('STABLE_DIFFUSION_API_KEY', '')
+    if 'IMGUR_API_KEY' not in st.session_state:
+        st.session_state.IMGUR_API_KEY = os.getenv('IMGUR_API_KEY', '')
 
-# API keys are always set from secrets
+# API keys are set from session state
 OPENAI_API_KEY = st.session_state.OPENAI_API_KEY
 STABLE_DIFFUSION_API_KEY = st.session_state.STABLE_DIFFUSION_API_KEY
 IMGUR_API_KEY = st.session_state.IMGUR_API_KEY
+
+# Check if API keys are missing
+if not OPENAI_API_KEY or not STABLE_DIFFUSION_API_KEY or not IMGUR_API_KEY:
+    st.warning("Some API keys are missing. Please set them in Streamlit secrets or environment variables.")
 
 # Set the environment variable and OpenAI API key
 os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
 openai.api_key = OPENAI_API_KEY
 
 # Flag to indicate API keys are set
-api_keys_set = True
+api_keys_set = bool(OPENAI_API_KEY and STABLE_DIFFUSION_API_KEY and IMGUR_API_KEY)
 
 # Stable Diffusion API endpoint
 STABLE_DIFFUSION_API_URL = "https://modelslab.com/api/v6/realtime/text2img"
@@ -121,6 +136,61 @@ STABLE_DIFFUSION_API_URL = "https://modelslab.com/api/v6/realtime/text2img"
 # Pillow settings
 ANTIALIAS = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.ANTIALIAS
 Image.MAX_IMAGE_PIXELS = None
+
+# Function to extract vector store from zip if needed
+def extract_vector_store(zip_path="vectorstore.zip", extract_to="."):
+    """Extract vector store from zip file if the directory doesn't exist."""
+    try:
+        if not os.path.exists("pdf_vectorstore"):
+            print("Vector store directory not found. Checking for zip file...")
+            
+            if os.path.exists(zip_path):
+                print(f"Found {zip_path}. Extracting...")
+                with st.spinner(f"Extracting vector store from {zip_path}..."):
+                    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                        zip_ref.extractall(extract_to)
+                print("Extraction complete!")
+                return True
+            else:
+                print(f"Zip file {zip_path} not found.")
+                return False
+        else:
+            print("Vector store directory already exists.")
+            return True
+    except Exception as e:
+        print(f"Error extracting vector store: {str(e)}")
+        return False
+
+# Extract vector store at startup
+vector_store_available = extract_vector_store()
+
+# Function to verify vector store directory exists
+def verify_vectorstore(directory_path="pdf_vectorstore"):
+    """Verify that the vector store directory exists and contains necessary files."""
+    try:
+        if not os.path.exists(directory_path):
+            print(f"Vector store directory not found: {directory_path}")
+            return False
+            
+        # List contents of directory
+        contents = os.listdir(directory_path)
+        print(f"Vector store directory contents: {contents}")
+        
+        # Check for chroma.sqlite3 file
+        if "chroma.sqlite3" not in contents:
+            print("Missing chroma.sqlite3 in vector store directory")
+            return False
+            
+        print(f"Vector store verified successfully at {directory_path}")
+        return True
+    except Exception as e:
+        print(f"Error verifying vector store: {str(e)}")
+        return False
+
+# Check vector store after extraction
+vectorstore_verified = verify_vectorstore()
+if not vectorstore_verified:
+    st.warning("Vector store not found or invalid. Chatbot functionality may be limited.")
 
 # Prompts for panorama generation
 PANORAMIC_PROMPT = """Create an ultra-wide panoramic photograph of San Francisco Bay during the California Gold Rush in 1852, spanning from the hills to the shoreline in a single continuous scene.
@@ -676,24 +746,58 @@ class ImgurClient:
 
 class RAGChatbot:
     def __init__(self, persist_directory: str = "pdf_vectorstore", model_name: str = "gpt-4o"):
-        # Changed: Always initialize with keys from secrets  
         try:
+            print(f"Initializing RAGChatbot with vector store at: {persist_directory}")
+            
+            # Check if vector store directory exists
+            if not os.path.exists(persist_directory):
+                raise FileNotFoundError(f"Vector store directory not found: {persist_directory}")
+                
+            # Print directory contents for debugging
+            contents = os.listdir(persist_directory)
+            print(f"Vector store directory contents: {contents}")
+            
+            # Initialize the embeddings model
+            print("Initializing HuggingFace embeddings...")
+            self.embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
+            
+            # Try to load the vector store
+            print("Loading Chroma vector store...")
             self.vector_store = Chroma(
                 persist_directory=persist_directory,
-                embedding_function=HuggingFaceEmbeddings(model_name="sentence-transformers/all-mpnet-base-v2")
+                embedding_function=self.embeddings
             )
+            
+            # Test if vector store has documents
+            print("Testing vector store retrieval...")
+            test_results = self.vector_store.similarity_search("gold rush", k=1)
+            if test_results:
+                print(f"Successfully retrieved {len(test_results)} documents from vector store")
+                print(f"Sample document content: {test_results[0].page_content[:100]}...")
+            else:
+                print("Warning: Vector store returned no documents")
+            
+            # Initialize the language model
+            print(f"Initializing ChatOpenAI ({model_name})...")
             self.llm = ChatOpenAI(
                 model_name=model_name,
                 temperature=0.7, 
                 openai_api_key=OPENAI_API_KEY
             )
+            
+            # Initialize the conversation memory
+            print("Initializing conversation memory...")
             self.memory = ConversationBufferMemory(
                 memory_key="chat_history",
                 return_messages=True
             )
-            template = """You are a helpful assistant that answers questions based on the provided context.
-Use the following context to answer the question. If you're unsure or the answer isn't in the context,
-say so directly rather than making assumptions.
+            
+            # Create the prompt template for the chain
+            print("Creating prompt template...")
+            template = """You are a helpful Gold Rush expert that answers questions based on the provided context.
+You are knowledgeable about Gold Rush history, mining techniques, notable locations, and key figures.
+Use the following context to answer the question. If the answer isn't clearly in the context,
+use your general knowledge about the Gold Rush era to provide a helpful response.
 
 Context: {context}
 
@@ -706,51 +810,101 @@ Answer: """
                 input_variables=["context", "chat_history", "question"],
                 template=template
             )
+            
+            # Create the conversational retrieval chain
+            print("Creating conversational retrieval chain...")
             self.chain = ConversationalRetrievalChain.from_llm(
                 llm=self.llm,
                 retriever=self.vector_store.as_retriever(search_kwargs={"k": 3}),
                 memory=self.memory,
                 combine_docs_chain_kwargs={"prompt": self.prompt}
             )
+            
             self.initialized = True
+            print("RAGChatbot initialization successful!")
+            
         except Exception as e:
-            print(f"Error initializing RAGChatbot: {str(e)}")
+            print(f"❌ Error initializing RAGChatbot: {str(e)}")
+            import traceback
+            traceback.print_exc()
             self.initialized = False
             
     def ask(self, question: str) -> str:
+        """Process a question and return an answer."""
         if not self.initialized:
-            return "The chatbot could not be initialized. Please check the API keys and try again."
+            return "I apologize, but I'm having trouble accessing my knowledge base. Please try again later or contact the administrator."
             
         try:
+            print(f"\nProcessing question: {question}")
+            
+            # Get relevant documents from vector store
+            print("Retrieving documents...")
             docs_and_scores = self.vector_store.similarity_search_with_score(question, k=3)
-            print("\nRetrieved Documents:")
-            for doc, score in docs_and_scores:
-                print(f"Document: {doc.page_content}\nScore: {score}\n")
+            print(f"Retrieved {len(docs_and_scores)} documents")
+            
+            for i, (doc, score) in enumerate(docs_and_scores):
+                print(f"Document {i+1} (score: {score}):")
+                print(f"Content: {doc.page_content[:150]}...")
+                
+            # Process through conversational retrieval chain
+            print("Generating response...")
             response = self.chain({"question": question})
+            print("Response generated successfully")
+            
             return response["answer"]
         except Exception as e:
-            return f"Error: {str(e)}"
+            print(f"❌ Error in RAGChatbot.ask: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            return f"I apologize, but I encountered an error while trying to access my knowledge base. Please try asking your question in a different way."
 
-# Changed: Modified the get_chatbot function to ensure API keys are set
+# Modified get_chatbot function with better error handling
 @st.cache_resource(show_spinner=False)
 def get_chatbot():
-    if st.session_state.OPENAI_API_KEY:
-        chatbot = RAGChatbot()
-        if not chatbot.initialized:
-            print("Chatbot failed to initialize properly.")
+    """Get or create the RAG chatbot instance."""
+    try:
+        # Ensure API key is available
+        if not OPENAI_API_KEY:
+            print("No OpenAI API key available")
             return None
+            
+        # Check if vector store exists
+        if not vectorstore_verified:
+            print("Vector store not available or accessible")
+            
+        # Create chatbot with expanded logging
+        print("Creating RAG chatbot...")
+        chatbot = RAGChatbot()
+        
+        # Verify initialization
+        if not chatbot.initialized:
+            print("Chatbot failed to initialize properly")
+            return None
+            
+        print("Chatbot created successfully")
         return chatbot
-    else:
-        print("No OpenAI API key available.")
+    except Exception as e:
+        print(f"Error in get_chatbot: {str(e)}")
         return None
 
-# Initialize chatbot after ensuring API keys are available
-chatbot = get_chatbot()
-if chatbot is None:
-    # Create a simple fallback chatbot for error cases
+# Initialize chatbot with better error handling
+try:
+    print("Initializing chatbot...")
+    chatbot = get_chatbot()
+    if chatbot is None:
+        print("Using fallback chatbot due to initialization failure")
+        # Create a simple fallback chatbot for error cases
+        class FallbackChatbot:
+            def ask(self, question: str) -> str:
+                return "I'm having trouble accessing my knowledge base about the Gold Rush. This could be due to missing or inaccessible vector store files. Please contact the administrator for assistance."
+        chatbot = FallbackChatbot()
+    else:
+        print("Chatbot initialized successfully")
+except Exception as e:
+    print(f"Error during chatbot initialization: {str(e)}")
     class FallbackChatbot:
         def ask(self, question: str) -> str:
-            return "I'm having trouble accessing the knowledge base. Please try again later or contact the administrator."
+            return "I encountered an unexpected error during initialization. Please try again later or contact the administrator."
     chatbot = FallbackChatbot()
 
 # ---------------------- End of Existing Classes ---------------------- #
@@ -817,11 +971,14 @@ with col1:
                 
                 # Add the image generation details as a hidden system message to the chatbot's memory.
                 if hasattr(chatbot, 'memory') and hasattr(chatbot.memory, 'chat_memory'):
-                    chatbot.memory.chat_memory.add_message(
-                        SystemMessage(
-                            content=f"Image Generation Details:\nFinal Prompt: {final_prompt}\nImage Evaluation: {json.dumps(best_analysis, indent=2)}"
+                    try:
+                        chatbot.memory.chat_memory.add_message(
+                            SystemMessage(
+                                content=f"Image Generation Details:\nFinal Prompt: {final_prompt}\nImage Evaluation: {json.dumps(best_analysis, indent=2)}"
+                            )
                         )
-                    )
+                    except Exception as e:
+                        print(f"Error adding message to chatbot memory: {str(e)}")
             else:
                 st.error("Failed to generate panorama.")
     
