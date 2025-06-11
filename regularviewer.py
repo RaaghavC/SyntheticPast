@@ -1188,3 +1188,4 @@ with col3:
     """, unsafe_allow_html=True)
     if st.button("Learn More About Mining", key="mining_techniques"):
         handle_topic_click("mining_techniques")
+
