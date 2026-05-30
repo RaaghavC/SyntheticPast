@@ -2,6 +2,14 @@ pdf_vectorstore
 pdf_vectorstore/*
 static
 venv
+.venv
+__pycache__/
+.playwright-mcp/
 .DS_Store
 SP
 .env
+
+# Local-only files (not committed)
+deployment/*.zip
+verify-*.png
+live-*.png
